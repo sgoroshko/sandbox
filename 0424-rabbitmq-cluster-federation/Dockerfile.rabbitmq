@@ -1,0 +1,16 @@
+# docker run --rm -it rabbitmq:3.10-management-alpine rabbitmq-plugins list
+
+FROM rabbitmq:3.10-management-alpine
+
+ARG COOKIE=mysecretcookie
+RUN echo $COOKIE > /var/lib/rabbitmq/.erlang.cookie && \
+    chmod 0600 /var/lib/rabbitmq/.erlang.cookie && \
+    chown rabbitmq:rabbitmq /var/lib/rabbitmq/.erlang.cookie
+
+RUN rabbitmq-plugins enable --offline \
+      rabbitmq_federation \
+      rabbitmq_federation_management \
+      rabbitmq_shovel \
+      rabbitmq_shovel_management \
+      rabbitmq_stream \
+      rabbitmq_stream_management

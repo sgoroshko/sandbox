@@ -1,0 +1,279 @@
+networks:
+  ingress:
+    external: true
+    name: sandbox-docker-ingress-traefik
+    driver: bridge
+  rabbitmq:
+    name: sandbox-rabbitmq-cluster-federation
+    driver: bridge
+
+
+volumes:
+  cluster01-rabbitmq01:
+    name: sandbox-federation-cluster01-rabbitmq01
+    driver: local
+  cluster01-rabbitmq02:
+    name: sandbox-federation-cluster01-rabbitmq02
+    driver: local
+  cluster01-rabbitmq03:
+    name: sandbox-federation-cluster01-rabbitmq03
+    driver: local
+  cluster02-rabbitmq01:
+    name: sandbox-federation-cluster02-rabbitmq01
+    driver: local
+  cluster02-rabbitmq02:
+    name: sandbox-federation-cluster02-rabbitmq02
+    driver: local
+  cluster02-rabbitmq03:
+    name: sandbox-federation-cluster02-rabbitmq03
+    driver: local
+
+
+configs:
+  cluster01.conf:
+    content: |
+      definitions.import_backend = local_filesystem
+      definitions.local.path = /etc/rabbitmq/definitions
+
+      channel_max = 256
+      frame_max = 262144
+
+      heartbeat = 20
+      consumer_timeout = 30000
+
+      cluster_name = rabbitmq.mycluster
+      cluster_keepalive_interval = 3000
+
+      cluster_formation.peer_discovery_backend = classic_config
+      cluster_formation.classic_config.nodes.1 = rabbit@rabbitmq01.mycluster01
+      cluster_formation.classic_config.nodes.2 = rabbit@rabbitmq02.mycluster01
+      cluster_formation.classic_config.nodes.3 = rabbit@rabbitmq03.mycluster01
+
+  cluster02.conf:
+    content: |
+      definitions.import_backend = local_filesystem
+      definitions.local.path = /etc/rabbitmq/definitions
+
+      channel_max = 256
+      frame_max = 262144
+
+      heartbeat = 20
+      consumer_timeout = 30000
+
+      cluster_name = rabbitmq.mycluster
+      cluster_keepalive_interval = 3000
+
+      cluster_formation.peer_discovery_backend = classic_config
+      cluster_formation.classic_config.nodes.1 = rabbit@rabbitmq01.mycluster02
+      cluster_formation.classic_config.nodes.2 = rabbit@rabbitmq02.mycluster02
+      cluster_formation.classic_config.nodes.3 = rabbit@rabbitmq03.mycluster02
+
+  definitions-basic:
+    content: |
+      {
+        "rabbitmq_version": "3.10",
+        "vhosts": [
+          { "name":"main" }],
+        "users": [
+          { "name":"appuser", "password":"secretpass", "tags":"administrator" }],
+        "permissions": [
+          { "user":"appuser", "vhost":"main", "configure":".*", "write":".*", "read":".*" }],
+        "exchanges": [
+          { "name": "intercluster.ex1", "vhost": "main", "type": "topic", "durable": true, "auto_delete": false }]
+      }
+
+  definitions-federation:
+    content: |
+      {
+        "rabbitmq_version": "3.10",
+        "policies": [{
+          "vhost": "main",
+          "name": "mypolicy",
+          "pattern": "^intercluster.*",
+          "definition": {
+            "federation-upstream": "myupstream"
+          }
+        }],
+        "parameters": [{
+          "component": "federation-upstream",
+          "vhost": "main",
+          "name": "myupstream",
+          "value": {
+            "ack-mode": "on-confirm",
+            "expires": 3600000,
+            "prefetch-count": 3,
+            "reconnect-delay": 2,
+            "uri": [
+              "amqp://appuser:secretpass@rabbitmq01.mycluster01:5672",
+              "amqp://appuser:secretpass@rabbitmq02.mycluster01:5672",
+              "amqp://appuser:secretpass@rabbitmq03.mycluster01:5672"
+            ]
+          }
+        }]
+      }
+
+
+services:
+  rabbitmq01.mycluster01: &base-cluster01
+    container_name: sandbox-federation-cluster01-rabbitmq01
+    hostname: rabbitmq01.mycluster01
+    build:
+      context: $PWD
+      dockerfile: Dockerfile.rabbitmq
+      args:
+        COOKIE: $COOKIE1
+    restart: unless-stopped
+    environment:
+      RABBITMQ_USE_LONGNAME: true
+    external_links:
+      - sandbox-federation-cluster01-rabbitmq01:rabbitmq01.mycluster01
+      - sandbox-federation-cluster01-rabbitmq02:rabbitmq02.mycluster01
+      - sandbox-federation-cluster01-rabbitmq03:rabbitmq03.mycluster01
+      - sandbox-federation-cluster02-rabbitmq01:rabbitmq01.mycluster02
+      - sandbox-federation-cluster02-rabbitmq02:rabbitmq02.mycluster02
+      - sandbox-federation-cluster02-rabbitmq03:rabbitmq03.mycluster02
+    networks:
+      - ingress
+      - rabbitmq
+    expose:
+      - 4369   # epmd
+      - 5552   # tcp/stream
+      - 5672   # tcp/amqp
+      - 15672  # http/web
+      - 15692  # http/metrics
+      - 25672  # clustering
+    configs:
+      - source: cluster01.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: definitions-basic
+        target: /etc/rabbitmq/definitions/01-basic.json
+    volumes:
+      - cluster01-rabbitmq01:/var/lib/rabbitmq
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.02'
+          memory: 256M
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_port_connectivity
+      start_interval: 8s
+      interval: 2s
+      timeout: 3s
+      retries: 3
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq01.rule: Host(`rabbitmq01.cluster01.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq01.service: sandbox-federation-cluster01-rabbitmq01
+      traefik.http.services.sandbox-federation-cluster01-rabbitmq01.loadBalancer.server.port: 15672
+
+  rabbitmq02.mycluster01:
+    <<: *base-cluster01
+    container_name: sandbox-federation-cluster01-rabbitmq02
+    hostname: rabbitmq02.mycluster01
+    volumes:
+      - cluster01-rabbitmq02:/var/lib/rabbitmq
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq02.rule: Host(`rabbitmq02.cluster01.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq02.service: sandbox-federation-cluster01-rabbitmq02
+      traefik.http.services.sandbox-federation-cluster01-rabbitmq02.loadBalancer.server.port: 15672
+
+  rabbitmq03.mycluster01:
+    <<: *base-cluster01
+    container_name: sandbox-federation-cluster01-rabbitmq03
+    hostname: rabbitmq03.mycluster01
+    volumes:
+      - cluster01-rabbitmq03:/var/lib/rabbitmq
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq03.rule: Host(`rabbitmq03.cluster01.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster01-rabbitmq03.service: sandbox-federation-cluster01-rabbitmq03
+      traefik.http.services.sandbox-federation-cluster01-rabbitmq03.loadBalancer.server.port: 15672
+
+  rabbitmq01.mycluster02: &base-cluster02
+    container_name: sandbox-federation-cluster02-rabbitmq01
+    hostname: rabbitmq01.mycluster02
+    build:
+      context: $PWD
+      dockerfile: Dockerfile.rabbitmq
+      args:
+        COOKIE: $COOKIE1
+    restart: unless-stopped
+    depends_on:
+      - rabbitmq01.mycluster01
+      - rabbitmq02.mycluster01
+      - rabbitmq03.mycluster01
+    environment:
+      RABBITMQ_USE_LONGNAME: true
+    external_links:
+      - sandbox-federation-cluster01-rabbitmq01:rabbitmq01.mycluster01
+      - sandbox-federation-cluster01-rabbitmq02:rabbitmq02.mycluster01
+      - sandbox-federation-cluster01-rabbitmq03:rabbitmq03.mycluster01
+      - sandbox-federation-cluster02-rabbitmq01:rabbitmq01.mycluster02
+      - sandbox-federation-cluster02-rabbitmq02:rabbitmq02.mycluster02
+      - sandbox-federation-cluster02-rabbitmq03:rabbitmq03.mycluster02
+    networks:
+      - ingress
+      - rabbitmq
+    expose:
+      - 4369   # epmd
+      - 5552   # tcp/stream
+      - 5672   # tcp/amqp
+      - 15672  # http/web
+      - 15692  # http/metrics
+      - 25672  # clustering
+    configs:
+      - source: cluster02.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+      - source: definitions-basic
+        target: /etc/rabbitmq/definitions/01-basic.json
+      - source: definitions-federation
+        target: /etc/rabbitmq/definitions/02-federation.json
+    volumes:
+      - cluster02-rabbitmq01:/var/lib/rabbitmq
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.02'
+          memory: 256M
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_port_connectivity
+      start_interval: 8s
+      interval: 2s
+      timeout: 3s
+      retries: 3
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq01.rule: Host(`rabbitmq01.cluster02.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq01.service: sandbox-federation-cluster02-rabbitmq01
+      traefik.http.services.sandbox-federation-cluster02-rabbitmq01.loadBalancer.server.port: 15672
+
+  rabbitmq02.mycluster02:
+    <<: *base-cluster02
+    container_name: sandbox-federation-cluster02-rabbitmq02
+    hostname: rabbitmq02.mycluster02
+    volumes:
+      - cluster02-rabbitmq02:/var/lib/rabbitmq
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq02.rule: Host(`rabbitmq02.cluster02.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq02.service: sandbox-federation-cluster02-rabbitmq02
+      traefik.http.services.sandbox-federation-cluster02-rabbitmq02.loadBalancer.server.port: 15672
+
+  rabbitmq03.mycluster02:
+    <<: *base-cluster02
+    container_name: sandbox-federation-cluster02-rabbitmq03
+    hostname: rabbitmq03.mycluster02
+    volumes:
+      - cluster02-rabbitmq03:/var/lib/rabbitmq
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq03.rule: Host(`rabbitmq03.cluster02.${HOST}`)
+      traefik.http.routers.sandbox-federation-cluster02-rabbitmq03.service: sandbox-federation-cluster02-rabbitmq03
+      traefik.http.services.sandbox-federation-cluster02-rabbitmq03.loadBalancer.server.port: 15672
