@@ -1,1 +1,1 @@
-# rabbitmq cluster
+# rabbitmq federation between clusters example
