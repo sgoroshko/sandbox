@@ -159,7 +159,8 @@ services:
           memory: 2G
     healthcheck:
       test: rabbitmq-diagnostics -q check_port_connectivity
-      start_interval: 8s
+      start_period: 40s
+      start_interval: 3s
       interval: 2s
       timeout: 3s
       retries: 3
@@ -203,9 +204,12 @@ services:
         COOKIE: $COOKIE2
     restart: unless-stopped
     depends_on:
-      - rabbitmq01.mycluster01
-      - rabbitmq02.mycluster01
-      - rabbitmq03.mycluster01
+      rabbitmq01.mycluster01:
+        condition: service_healthy
+      rabbitmq02.mycluster01:
+        condition: service_healthy
+      rabbitmq03.mycluster01:
+        condition: service_healthy
     environment:
       RABBITMQ_USE_LONGNAME: true
     external_links:
@@ -244,7 +248,8 @@ services:
           memory: 2G
     healthcheck:
       test: rabbitmq-diagnostics -q check_port_connectivity
-      start_interval: 8s
+      start_period: 40s
+      start_interval: 3s
       interval: 2s
       timeout: 3s
       retries: 3
