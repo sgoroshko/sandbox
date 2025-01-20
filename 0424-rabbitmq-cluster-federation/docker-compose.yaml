@@ -200,7 +200,7 @@ services:
       context: $PWD
       dockerfile: Dockerfile.rabbitmq
       args:
-        COOKIE: $COOKIE1
+        COOKIE: $COOKIE2
     restart: unless-stopped
     depends_on:
       - rabbitmq01.mycluster01
