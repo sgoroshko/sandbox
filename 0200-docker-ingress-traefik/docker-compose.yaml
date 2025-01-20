@@ -1,0 +1,44 @@
+networks:
+  ingress: # use this network by name like 'external' in your docker-compose projects
+    name: sandbox-docker-ingress-traefik
+    driver: bridge
+
+
+services:
+  traefik:
+    container_name: sandbox-docker-ingress-traefik
+    restart: unless-stopped
+    image: traefik:v2.11
+    command: >-
+      --ping
+      --api.dashboard
+      --providers.docker.exposedByDefault=false
+      --providers.docker.network=sandbox-ingress-traefik
+      --entryPoints.web.address=:80
+      --entryPoints.ping.address=:8082
+      --serversTransport.forwardingTimeouts.dialTimeout=1s
+      --serversTransport.forwardingTimeouts.responseHeaderTimeout=5s
+    networks:
+      - ingress
+    expose:
+      - 80
+      - 8080 # dashboard
+    ports:
+      - '80:80'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        reservations: { cpus: '0.02', memory:  32M }
+        limits:       { cpus: '2.00', memory: 256M }
+    healthcheck:
+      test: traefik healthcheck --ping
+      start_period: 20s
+      interval: 3s
+      timeout: 2s
+      retries: 2
+    labels:
+      traefik.enable: true
+      traefik.http.routers.sandbox-docker-ingress-traefik.rule: Host(`traefik.${HOST}`)
+      traefik.http.routers.sandbox-docker-ingress-traefik.service: api@internal
+      traefik.http.services.sandbox-docker-ingress-traefik.loadBalancer.server.port: 8080
